@@ -76,9 +76,9 @@ class VoiceController {
         if (Capture.isFormatSupported(opus)) {
             _fmt = opus; _fmtName = "ogg"; _maxMs = 30000;
         } else if (Capture.isFormatSupported(wav16)) {
-            _fmt = wav16; _fmtName = "wav"; _maxMs = 12000; // 32 КБ/с — бережём память
+            _fmt = wav16; _fmtName = "wav"; _maxMs = 6000; // 32 КБ/с, а у приложения всего 768 КБ памяти
         } else if (Capture.isFormatSupported(wav8)) {
-            _fmt = wav8; _fmtName = "wav"; _maxMs = 20000;
+            _fmt = wav8; _fmtName = "wav"; _maxMs = 12000;
         } else {
             _fmt = null;
         }
@@ -139,7 +139,13 @@ class VoiceController {
     }
 
     // Capture.Callbacks
+    private const MAX_BYTES = 200000; // лимит памяти приложения 768 КБ, addAll на время копирует буфер
+
     function onData(data as ByteArray) as Void {
+        if (_buf.size() + data.size() > MAX_BYTES) {
+            stopAndSend(); // не даём упасть по памяти
+            return;
+        }
         _buf = _buf.addAll(data);
     }
 
