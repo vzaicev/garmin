@@ -1,0 +1,11 @@
+tools/
+*.prg
+*.iq
+bin/
+.secrets/
+*.der
+*.pem
+__pycache__/
+.venv/
+models/
+server/work/
