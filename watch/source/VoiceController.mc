@@ -143,7 +143,7 @@ class VoiceController {
         _buf = _buf.addAll(data);
     }
 
-    function onError(err) as Void {
+    function onError(err as Capture.Error) as Void {
         _recTimer.stop();
         _state = S_IDLE;
         setStatus("Ошибка записи " + err);
@@ -165,7 +165,7 @@ class VoiceController {
     }
 
     // ---------- загрузка ----------
-    private function headers() as Dictionary {
+    private function authHeaders() as Dictionary {
         return {
             "Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON,
             "Authorization" => "Bearer " + API_TOKEN
@@ -190,7 +190,7 @@ class VoiceController {
         setStatus("Отправляю " + (_chunkN + 1) + "/" + total);
         Communications.makeWebRequest(SERVER_URL + "/v1/chunk",
             {"sid" => _sid, "n" => _chunkN, "data" => b64},
-            {:method => Communications.HTTP_REQUEST_METHOD_POST, :headers => headers(),
+            {:method => Communications.HTTP_REQUEST_METHOD_POST, :headers => authHeaders(),
              :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON, :context => _gen},
             method(:onChunk));
     }
@@ -210,7 +210,7 @@ class VoiceController {
         setStatus("Распознаю…");
         Communications.makeWebRequest(SERVER_URL + "/v1/ask",
             {"sid" => _sid, "fmt" => _fmtName},
-            {:method => Communications.HTTP_REQUEST_METHOD_POST, :headers => headers(),
+            {:method => Communications.HTTP_REQUEST_METHOD_POST, :headers => authHeaders(),
              :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON, :context => _gen},
             method(:onAsk));
     }
@@ -265,7 +265,7 @@ class VoiceController {
                 setStatus("Держи START и говори");
                 WatchUi.requestUpdate();
             }
-            vibrate();
+            buzz();
             return;
         }
         if (st.equals("listening")) {
@@ -379,7 +379,7 @@ class VoiceController {
         WatchUi.requestUpdate();
     }
 
-    private function vibrate() as Void {
+    private function buzz() as Void {
         if (Attention has :vibrate) {
             Attention.vibrate([new Attention.VibeProfile(50, 150)]);
         }
