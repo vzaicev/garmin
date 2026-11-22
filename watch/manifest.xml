@@ -1,0 +1,17 @@
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application id="6c1f0b7e4a8d4f2e9b3a5d7c8e9f0a1b" type="watch-app" name="@Strings.AppName" entry="VoiceApp" launcherIcon="@Drawables.LauncherIcon" minApiLevel="6.0.3">
+        <iq:products>
+            <iq:product id="fr970"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="Communications"/>
+            <iq:uses-permission id="AudioInput"/>
+            <iq:uses-permission id="AudioOutput"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>rus</iq:language>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+        <iq:barrels/>
+    </iq:application>
+</iq:manifest>

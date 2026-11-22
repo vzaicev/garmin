@@ -9,3 +9,4 @@ __pycache__/
 .venv/
 models/
 server/work/
+watch/source/Config.mc

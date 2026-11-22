@@ -211,11 +211,50 @@ TOKEN = load_token()
 WORK.mkdir(exist_ok=True)
 
 
+# --- защита: автобан по неверному токену и лимит частоты ---
+BAN_FAILS, BAN_WINDOW, BAN_TIME = 5, 600, 24 * 3600          # по IP: 5 ошибок за 10 мин -> бан на сутки
+GLOBAL_FAILS, GLOBAL_WINDOW, GLOBAL_BAN = 30, 3600, 3600      # без IP: 30 ошибок за час -> пауза на час
+ASK_MIN_GAP, ASK_PER_DAY = 3, 200
+_fails: dict[str, list[float]] = {}
+_banned: dict[str, float] = {}
+_asks: list[float] = []
+_sec_lock = threading.Lock()
+
+
+def client_ip(req: Request) -> str:
+    xff = req.headers.get("x-forwarded-for", "")
+    return xff.split(",")[0].strip() if xff else "*"  # "*" = IP неизвестен, общий счётчик
+
+
 def auth(req: Request) -> None:
-    h = req.headers.get("authorization", "")
-    tok = h[7:] if h.lower().startswith("bearer ") else req.query_params.get("token", "")
-    if not tok or not hmac.compare_digest(tok, TOKEN):
-        raise HTTPException(401, "unauthorized")
+    ip = client_ip(req)
+    now = time.time()
+    with _sec_lock:
+        if _banned.get(ip, 0) > now:
+            raise HTTPException(403, "banned")
+        h = req.headers.get("authorization", "")
+        tok = h[7:] if h.lower().startswith("bearer ") else req.query_params.get("token", "")
+        if tok and hmac.compare_digest(tok, TOKEN):
+            return
+        lim, win, ban = (GLOBAL_FAILS, GLOBAL_WINDOW, GLOBAL_BAN) if ip == "*" else (BAN_FAILS, BAN_WINDOW, BAN_TIME)
+        f = [t for t in _fails.get(ip, []) if t > now - win] + [now]
+        _fails[ip] = f
+        if len(f) >= lim:
+            _banned[ip] = now + ban
+            _fails.pop(ip, None)
+        log({"event": "auth_fail", "ip": ip, "path": req.url.path, "banned": ip in _banned})
+    raise HTTPException(401, "unauthorized")
+
+
+def rate_limit() -> None:
+    now = time.time()
+    with _sec_lock:
+        _asks[:] = [t for t in _asks if t > now - 86400]
+        if _asks and now - _asks[-1] < ASK_MIN_GAP:
+            raise HTTPException(429, "too fast")
+        if len(_asks) >= ASK_PER_DAY:
+            raise HTTPException(429, "daily limit")
+        _asks.append(now)
 
 
 @app.get("/v1/health")
@@ -223,9 +262,33 @@ def health():
     return {"ok": True}
 
 
+_uploads: dict[str, dict] = {}  # sid -> {"t": time, "parts": {n: bytes}}
+
+
+@app.post("/v1/chunk")
+async def chunk(req: Request):
+    """Загрузка по частям (мост часы->телефон может не пропустить большой запрос).
+    JSON {"sid": "...", "n": 0, "data": base64}."""
+    auth(req)
+    d = json.loads(await req.body() or b"{}")
+    sid, n = str(d.get("sid", "")), int(d.get("n", -1))
+    if not re.fullmatch(r"[A-Za-z0-9]{4,32}", sid) or not 0 <= n < 1000:
+        raise HTTPException(400, "bad chunk")
+    now = time.time()
+    for k in [k for k, v in _uploads.items() if v["t"] < now - 600]:
+        _uploads.pop(k, None)
+    up = _uploads.setdefault(sid, {"t": now, "parts": {}})
+    up["parts"][n] = base64.b64decode(d.get("data", ""))
+    if sum(len(p) for p in up["parts"].values()) > MAX_AUDIO:
+        _uploads.pop(sid, None)
+        raise HTTPException(413, "too large")
+    return {"ok": True, "n": n}
+
+
 @app.post("/v1/ask")
 async def ask(req: Request):
     auth(req)
+    rate_limit()
     gc_jobs()
     body = await req.body()
     if len(body) > MAX_AUDIO:
@@ -237,6 +300,11 @@ async def ask(req: Request):
         text = (d.get("text") or "").strip() or None
         if d.get("audio"):
             audio = base64.b64decode(d["audio"])
+        elif d.get("sid"):
+            up = _uploads.pop(str(d["sid"]), None)
+            if not up:
+                raise HTTPException(404, "unknown upload")
+            audio = b"".join(up["parts"][k] for k in sorted(up["parts"]))
     else:
         audio = body
     if not audio and not text:
@@ -248,14 +316,23 @@ async def ask(req: Request):
 
 
 @app.get("/v1/result/{jid}")
-def result(jid: str, req: Request):
+def result(jid: str, req: Request, wait: int = 0, since: str = ""):
+    """wait>0 — long-poll: держим запрос до смены статуса (≠ since) или готовности, но не дольше wait с.
+    Каждый лишний запрос через мост часы→телефон→Funnel стоит секунды, поэтому опрашиваем редко."""
     auth(req)
     job = jobs.get(jid)
     if not job:
         raise HTTPException(404, "unknown id")
-    st = job["status"]
-    if st == "done" and not job.get("audio"):
-        st = "speaking"  # текст готов, идёт синтез
+
+    def state() -> str:
+        s = job["status"]
+        return "speaking" if s == "done" and not job.get("audio") else s  # текст готов, идёт синтез
+
+    deadline = time.time() + max(0, min(wait, 25))
+    st = state()
+    while time.time() < deadline and st not in ("done", "error") and (not since or st == since):
+        time.sleep(0.3)
+        st = state()
     ready = st in ("done", "error")
     return JSONResponse({"status": st, "heard": job.get("heard", ""),
                          "text": job.get("text", "") if ready else "", "audio": bool(job.get("audio"))})
